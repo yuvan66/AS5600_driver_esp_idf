@@ -17,7 +17,7 @@ esp_err_t as_init(as5600_config_t *config, as5600_t *dev)
     };
 
     esp_err_t ret = i2c_new_master_bus(&bus_config, &dev->bus_handle);
-    if (ret != ESP_OK)(val2 << 8) | val1;
+    if (ret != ESP_OK)
     {
         return ret;
     }
@@ -79,6 +79,58 @@ esp_err_t as_get_angle_r (as5600_t *dev, float *angle)
     value = ((val2 & 0x0F) << 8) | val1;
     uint16_t adjusted = (value + 4096 - dev->zero_offset) % 4096;
     *angle = ((float)adjusted/4096.0f)*360.0f;
+
+    return ESP_OK;
+
+}
+
+esp_err_t as_get_angle_r_rpm (as5600_t *dev, uint16_t *angle)
+{
+    if (dev == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t reg = STATUS;
+    uint8_t val1, val2;  // val1 -> Lower   // val2 -> Higher
+    uint16_t value;
+    esp_err_t ret = i2c_master_transmit_receive(dev->dev_handle, &reg, BUFFER_SIZE_1, &val1, BUFFER_SIZE_1, pdMS_TO_TICKS(100));
+
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    if (!((val1 >> 5) & 0x01)) {
+        return AS5600_ERR_MAGNET_NOT_DETECTED;
+    }
+    if ((val1 >> 4) & 0x01) {
+        return AS5600_ERR_MAGNET_TOO_WEAK;
+    }
+    if ((val1 >> 3) & 0x01) {
+        return AS5600_ERR_MAGNET_TOO_STRONG;
+    }
+
+    reg = RAW_H;
+    ret = i2c_master_transmit_receive(dev->dev_handle, &reg, BUFFER_SIZE_1, &val2, BUFFER_SIZE_1, pdMS_TO_TICKS(100));
+
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    reg = RAW_L;
+    ret = i2c_master_transmit_receive(dev->dev_handle, &reg, BUFFER_SIZE_1, &val1, BUFFER_SIZE_1, pdMS_TO_TICKS(100));
+
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    value &= 0x0000;
+    value = ((val2 & 0x0F) << 8) | val1;
+    // uint16_t adjusted = (value + 4096 - dev->zero_offset) % 4096;
+    *angle = value;
 
     return ESP_OK;
 
@@ -393,4 +445,48 @@ esp_err_t as_zero_here (as5600_t *dev)
 
     return ESP_OK;
 
+}
+
+esp_err_t as_get_rpm(uint16_t raw, float *rpm)
+{
+    // static uint16_t prev_raw;
+    // static uint64_t prev_time_us;
+    // static bool first_sample = true;
+    // static double filtered;
+    // static double total;
+
+   
+    uint64_t current_time_us = esp_timer_get_time();
+
+    if (first_sample)
+    {
+        total = raw;
+        filtered = total;
+        prev_raw = raw;
+        prev_time_us = current_time_us;
+        first_sample = false;
+        return ESP_ERR_INVALID_ARG;       
+    }
+
+    int32_t delta = (uint32_t)raw - (uint32_t)prev_raw;
+    if (delta > AS_WRAP_AROUND_POS)
+    {
+        delta = delta - AS_TOTAL_REV_COUNT;
+    }
+    else if (delta < AS_WRAP_AROUND_NEG)
+    {
+        delta = delta + AS_TOTAL_REV_COUNT;
+    }
+    total = total + delta;
+
+    double prev_filtered = filtered;
+    filtered = ((0.9) * filtered) + ((0.1) * total);        
+
+    float time = (float)(current_time_us - prev_time_us)/1000000.0f;
+
+    prev_raw = raw;
+    prev_time_us = current_time_us;
+
+    *rpm = ((float)(filtered - prev_filtered    )/ (float)AS_TOTAL_REV_COUNT) * (60.0f/time);
+    return ESP_OK;
 }

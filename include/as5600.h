@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #include <esp_err.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 
 #include <driver/i2c_master.h>
@@ -43,6 +45,10 @@
 #define BUFFER_SIZE_1 1u
 #define BUFFER_SIZE_2 2u
 
+#define AS_WRAP_AROUND_POS 2048
+#define AS_WRAP_AROUND_NEG -2048
+#define AS_TOTAL_REV_COUNT 4096
+
 typedef struct {
     i2c_port_num_t i2c_port;
     gpio_num_t sda_num;
@@ -66,9 +72,17 @@ typedef struct {
     bool watchdog_en;
 }as5600_conf_reg_t;
 
+static uint16_t prev_raw;
+static uint64_t prev_time_us;
+static bool first_sample = true;
+static double filtered;
+static double total;
+
 esp_err_t as_init(as5600_config_t *config, as5600_t *dev);
 
 esp_err_t as_get_angle_r(as5600_t *dev, float *angle);
+
+esp_err_t as_get_angle_r_rpm(as5600_t *dev, uint16_t *angle);
 
 esp_err_t as_get_angle(as5600_t *dev, float *angle);
 
@@ -91,6 +105,8 @@ esp_err_t as_set_conf(as5600_t *dev, const as5600_conf_reg_t *conf);
 esp_err_t as_get_conf(as5600_t *dev, as5600_conf_reg_t *conf);
 
 esp_err_t as_zero_here(as5600_t *dev);
+
+esp_err_t as_get_rpm(uint16_t raw, float *rpm);
 
 /* Helper functions */
 esp_err_t write_12b_reg (as5600_t *dev, uint8_t reg_h, uint8_t reg_l, uint16_t value);
